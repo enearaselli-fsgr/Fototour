@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Reichsgasse 35 – Gebäude-Erkennung</title>
+  <style>
+    :root{
+      --bg:#0b0d10; --panel:rgba(12,16,22,.78); --panel2:rgba(255,255,255,.08);
+      --text:#f5f7fb; --muted:#a9b2c3; --ok:#5ee08c; --warn:#ffd166; --bad:#ff6b6b;
+      --accent:#aaced0; --line:rgba(255,255,255,.16);
+    }
+    *{box-sizing:border-box} html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+    video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000;transform:scaleX(-1)}
+    .shade{position:fixed;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.55),rgba(0,0,0,.08) 35%,rgba(0,0,0,.72));pointer-events:none}
+    .top{position:fixed;left:12px;right:12px;top:calc(12px + env(safe-area-inset-top));display:flex;gap:10px;align-items:flex-start;z-index:5}
+    .badge{padding:10px 12px;border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(14px);border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.22);flex:1}
+    .status{font-weight:800;font-size:17px;letter-spacing:-.02em}.sub{color:var(--muted);font-size:12px;line-height:1.35;margin-top:4px}.dot{display:inline-block;width:10px;height:10px;border-radius:99px;background:var(--bad);margin-right:7px}.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
+    button{appearance:none;border:0;border-radius:14px;background:var(--accent);color:#101415;font-weight:800;padding:12px 14px;font-size:14px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line);box-shadow:none}.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.smallbtn{padding:9px 10px;font-size:12px}
+    .crosshair{position:fixed;left:50%;top:50%;width:92px;height:92px;margin-left:-46px;margin-top:-46px;border:2px solid rgba(255,255,255,.65);border-radius:50%;z-index:2;box-shadow:0 0 0 999px rgba(0,0,0,.02)}
+    .crosshair:before,.crosshair:after{content:"";position:absolute;background:rgba(255,255,255,.65)}.crosshair:before{left:45px;top:-22px;width:2px;height:136px}.crosshair:after{top:45px;left:-22px;width:136px;height:2px}.label{position:fixed;left:50%;top:calc(50% + 62px);transform:translateX(-50%);padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.55);font-size:12px;z-index:2;color:#fff;white-space:nowrap}
+    .bottom{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:14px;backdrop-filter:blur(14px);box-shadow:0 12px 40px rgba(0,0,0,.25)}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.metric{background:var(--panel2);border-radius:14px;padding:10px}.metric b{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:4px}.metric span{font-size:17px;font-weight:800}.hit{display:none;margin-top:12px;padding:14px;border-radius:18px;background:rgba(94,224,140,.15);border:1px solid rgba(94,224,140,.42)}.hit h2{margin:0 0 5px;font-size:18px}.hit p{margin:0;color:#dceee3;line-height:1.35;font-size:14px}.hint{font-size:12px;color:var(--muted);line-height:1.35;margin-top:10px}.progress{height:8px;background:rgba(255,255,255,.12);border-radius:99px;overflow:hidden;margin-top:10px}.bar{height:100%;width:0;background:var(--accent);transition:width .2s ease}.settings{display:none;margin-top:12px;border-top:1px solid var(--line);padding-top:12px}.settings label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}.settings input{width:100%;border:1px solid var(--line);border-radius:12px;background:rgba(0,0,0,.35);color:white;padding:10px;font-size:14px}
+    a{color:var(--accent)}
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <div class="shade"></div>
+  <div class="crosshair"></div><div class="label">Gebäude in die Mitte nehmen</div>
+
+  <div class="top">
+    <div class="badge">
+      <div class="status"><span id="dot" class="dot"></span><span id="status">Bereit</span></div>
+      <div id="subtitle" class="sub">Starte Kamera, Standort und Kompass.</div>
+      <div class="controls">
+        <button id="startBtn">Starten</button>
+        <button id="calibrateBtn" class="secondary smallbtn">Richtung kalibrieren</button>
+        <button id="settingsBtn" class="secondary smallbtn">Feintuning</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div><b>Reichsgasse 35, Chur</b><br><span class="sub">Prototyp: GPS + Kompass + Sichtfeldprüfung, keine echte Bild-KI.</span></div>
+    <div class="progress"><div id="bar" class="bar"></div></div>
+    <div class="grid">
+      <div class="metric"><b>Distanz</b><span id="dist">–</span></div>
+      <div class="metric"><b>Blickabweichung</b><span id="angle">–</span></div>
+      <div class="metric"><b>Deine Richtung</b><span id="heading">–</span></div>
+      <div class="metric"><b>Richtung zum Gebäude</b><span id="bearing">–</span></div>
+    </div>
+    <div id="hit" class="hit">
+      <h2>Gebäude erkannt: Neues Gebäude / Reichsgasse 35</h2>
+      <p>Hier könnten jetzt deine Archivinformationen, historischen Fotos, Audiotexte oder Pictomap-Inhalte aus einer JSON-Datei angezeigt werden.</p>
+    </div>
+    <div id="settings" class="settings">
+      <label>Gebäude-Breitengrad</label><input id="latInput" type="number" step="0.000001" />
+      <label>Gebäude-Längengrad</label><input id="lngInput" type="number" step="0.000001" />
+      <label>Erkennungsradius in Metern</label><input id="radiusInput" type="number" step="1" />
+      <label>Maximale Blickabweichung in Grad</label><input id="angleInput" type="number" step="1" />
+      <div class="controls"><button id="saveSettings" class="smallbtn">Speichern</button><button id="resetSettings" class="secondary smallbtn">Zurücksetzen</button></div>
+    </div>
+    <div class="hint">Hinweis iPhone: Diese Datei muss über HTTPS laufen, z.B. GitHub Pages. Kamera, GPS und Kompass funktionieren lokal oft nicht zuverlässig.</div>
+  </div>
+
+<script>
+const building = {
+  id: "reichsgasse_35_chur",
+  name: "Neues Gebäude / Reichsgasse 35",
+  lat: 46.850100,
+  lng: 9.533720,
+  info: "Standeskanzlei Graubünden, Reichsgasse 35, Chur."
+};
+let config = JSON.parse(localStorage.getItem("r35_config") || "null") || {
+  lat: building.lat,
+  lng: building.lng,
+  radius: 90,
+  maxAngle: 26,
+  headingOffset: 0
+};
+let user = {lat:null,lng:null,accuracy:null,heading:null};
+let watchId = null;
+
+const $ = id => document.getElementById(id);
+const statusEl=$('status'), subtitle=$('subtitle'), dot=$('dot'), bar=$('bar'), hit=$('hit');
+
+function toRad(d){return d*Math.PI/180} function toDeg(r){return r*180/Math.PI}
+function distanceMeters(a,b,c,d){const R=6371000, p1=toRad(a), p2=toRad(c), dp=toRad(c-a), dl=toRad(d-b); const x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2; return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+function bearingDeg(lat1, lon1, lat2, lon2){const y=Math.sin(toRad(lon2-lon1))*Math.cos(toRad(lat2)); const x=Math.cos(toRad(lat1))*Math.sin(toRad(lat2))-Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(toRad(lon2-lon1)); return (toDeg(Math.atan2(y,x))+360)%360;}
+function angleDiff(a,b){return Math.abs(((a-b+540)%360)-180)}
+function setStatus(kind, title, text){dot.className='dot '+(kind||''); statusEl.textContent=title; subtitle.textContent=text;}
+function fmt(n,s=''){return Number.isFinite(n)?Math.round(n)+s:'–'}
+
+async function startCamera(){
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'} }, audio:false });
+  $('video').srcObject = stream;
+}
+
+async function requestOrientation(){
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    const res = await DeviceOrientationEvent.requestPermission();
+    if(res !== 'granted') throw new Error('Kompass nicht erlaubt');
+  }
+  window.addEventListener('deviceorientationabsolute', onOrient, true);
+  window.addEventListener('deviceorientation', onOrient, true);
+}
+function onOrient(e){
+  let h = null;
+  if (typeof e.webkitCompassHeading === 'number') h = e.webkitCompassHeading; // iOS
+  else if (e.absolute && typeof e.alpha === 'number') h = 360 - e.alpha;
+  else if (typeof e.alpha === 'number') h = 360 - e.alpha;
+  if(h !== null) user.heading = (h + config.headingOffset + 360) % 360;
+  update();
+}
+function startGps(){
+  if(!navigator.geolocation) throw new Error('Geolocation nicht verfügbar');
+  watchId = navigator.geolocation.watchPosition(pos=>{
+    user.lat=pos.coords.latitude; user.lng=pos.coords.longitude; user.accuracy=pos.coords.accuracy; update();
+  }, err=>setStatus('', 'Standortfehler', err.message), {enableHighAccuracy:true, maximumAge:1000, timeout:12000});
+}
+
+function update(){
+  $('heading').textContent = user.heading===null?'–':Math.round(user.heading)+'°';
+  if(user.lat===null){ setStatus('warn','Suche Standort','GPS-Signal wird gesucht.'); return; }
+  const d = distanceMeters(user.lat,user.lng,config.lat,config.lng);
+  const b = bearingDeg(user.lat,user.lng,config.lat,config.lng);
+  const diff = user.heading===null ? NaN : angleDiff(user.heading,b);
+  $('dist').textContent = fmt(d,' m'); $('bearing').textContent = fmt(b,'°'); $('angle').textContent = Number.isFinite(diff)?fmt(diff,'°'):'–';
+  let distScore = Math.max(0, 1 - d/config.radius);
+  let angleScore = Number.isFinite(diff)?Math.max(0, 1 - diff/config.maxAngle):0;
+  let score = Math.round((distScore*.55 + angleScore*.45)*100);
+  bar.style.width = Math.max(0, Math.min(100, score))+'%';
+  const ok = d <= config.radius && Number.isFinite(diff) && diff <= config.maxAngle;
+  hit.style.display = ok ? 'block':'none';
+  if(ok) setStatus('ok','Gebäude erkannt','Du bist nahe genug und blickst ungefähr auf Reichsgasse 35.');
+  else if(d > config.radius) setStatus('warn','Noch zu weit weg','Gehe näher an Reichsgasse 35 heran. GPS-Genauigkeit: ca. '+fmt(user.accuracy,' m'));
+  else if(!Number.isFinite(diff)) setStatus('warn','Kompass fehlt','Bewege das Handy kurz in einer Acht oder erlaube Bewegungssensoren.');
+  else setStatus('warn','Gebäude noch nicht im Blick','Drehe dich Richtung '+Math.round(b)+'°.');
+}
+
+$('startBtn').onclick = async () => {
+  try{
+    setStatus('warn','Starte','Kamera, Standort und Kompass werden aktiviert.');
+    await startCamera(); await requestOrientation(); startGps();
+  }catch(e){ setStatus('', 'Start fehlgeschlagen', e.message || String(e)); }
+};
+$('calibrateBtn').onclick = () => {
+  if(user.lat===null || user.heading===null){ setStatus('warn','Kalibrierung nicht möglich','Du brauchst zuerst Standort und Kompass.'); return; }
+  const b = bearingDeg(user.lat,user.lng,config.lat,config.lng);
+  config.headingOffset = (config.headingOffset + b - user.heading + 360) % 360;
+  localStorage.setItem('r35_config', JSON.stringify(config));
+  setStatus('ok','Kalibriert','Aktuelle Handy-Richtung wurde als Blick auf Reichsgasse 35 gesetzt.'); update();
+};
+$('settingsBtn').onclick = () => {$('settings').style.display = $('settings').style.display==='block'?'none':'block'; loadInputs();};
+function loadInputs(){ $('latInput').value=config.lat; $('lngInput').value=config.lng; $('radiusInput').value=config.radius; $('angleInput').value=config.maxAngle; }
+$('saveSettings').onclick = () => {config.lat=parseFloat($('latInput').value); config.lng=parseFloat($('lngInput').value); config.radius=parseFloat($('radiusInput').value); config.maxAngle=parseFloat($('angleInput').value); localStorage.setItem('r35_config', JSON.stringify(config)); update();};
+$('resetSettings').onclick = () => {localStorage.removeItem('r35_config'); config={lat:building.lat,lng:building.lng,radius:90,maxAngle:26,headingOffset:0}; loadInputs(); update();};
+loadInputs();
+setStatus('', 'Bereit', 'Tippe auf Starten. Am besten draussen vor Ort testen.');
+</script>
+</body>
+</html>
