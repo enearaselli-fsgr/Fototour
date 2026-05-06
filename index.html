@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>Reichsgasse 35 Kamera-Erkennung</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#000; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+    video { position:fixed; inset:0; width:100vw; height:100vh; object-fit:cover; background:#000; transform:none; }
+    #shutter {
+      position:fixed; left:50%; bottom:calc(28px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+      width:76px; height:76px; border-radius:50%; border:5px solid rgba(255,255,255,.92);
+      background:rgba(255,255,255,.22); backdrop-filter:blur(8px); z-index:10; padding:0;
+      box-shadow:0 8px 32px rgba(0,0,0,.35); appearance:none;
+    }
+    #shutter::after { content:""; display:block; width:54px; height:54px; margin:6px auto; border-radius:50%; background:rgba(255,255,255,.92); }
+    #result {
+      position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:20;
+      text-align:center; padding:26px; color:white; font-size:30px; line-height:1.15; font-weight:800;
+      background:rgba(0,0,0,.72); letter-spacing:-.02em;
+    }
+    #result.ok { background:rgba(0,80,36,.76); }
+    #result.bad { background:rgba(120,0,0,.76); }
+    #result.show { display:flex; }
+    #debug { display:none; }
+  </style>
+</head>
+<body>
+  <video id="camera" autoplay playsinline muted></video>
+  <button id="shutter" aria-label="Abdrücken"></button>
+  <div id="result"></div>
+  <div id="debug"></div>
+
+<script>
+(() => {
+  // Zielgebäude: Reichsgasse 35, Chur. Falls nötig hier feinjustieren.
+  const TARGET = {
+    name: 'Reichsgasse 35',
+    lat: 46.850100,
+    lng: 9.533720
+  };
+
+  // Erkennungslogik: Standort muss nahe genug sein und die Kamera grob zum Gebäude zeigen.
+  const MAX_DISTANCE_M = 95;
+  const MAX_ANGLE_DEG = 32;
+  const MAX_GPS_ACCURACY_M = 80;
+
+  const video = document.getElementById('camera');
+  const shutter = document.getElementById('shutter');
+  const result = document.getElementById('result');
+
+  const state = {
+    lat: null,
+    lng: null,
+    accuracy: null,
+    heading: null,
+    orientationPermissionAsked: false
+  };
+
+  function rad(d) { return d * Math.PI / 180; }
+  function deg(r) { return r * 180 / Math.PI; }
+
+  function distanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const p1 = rad(lat1), p2 = rad(lat2);
+    const dp = rad(lat2 - lat1), dl = rad(lon2 - lon1);
+    const a = Math.sin(dp/2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) ** 2;
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function bearingDeg(lat1, lon1, lat2, lon2) {
+    const y = Math.sin(rad(lon2 - lon1)) * Math.cos(rad(lat2));
+    const x = Math.cos(rad(lat1)) * Math.sin(rad(lat2)) - Math.sin(rad(lat1)) * Math.cos(rad(lat2)) * Math.cos(rad(lon2 - lon1));
+    return (deg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  function angleDiff(a, b) {
+    return Math.abs(((a - b + 540) % 360) - 180);
+  }
+
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+    } catch (e) {
+      showResult(false);
+    }
+  }
+
+  function startGps() {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.watchPosition(
+      pos => {
+        state.lat = pos.coords.latitude;
+        state.lng = pos.coords.longitude;
+        state.accuracy = pos.coords.accuracy;
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
+  }
+
+  function orientationHandler(e) {
+    let heading = null;
+
+    // iPhone/Safari liefert oft webkitCompassHeading, Android meist alpha.
+    if (typeof e.webkitCompassHeading === 'number') {
+      heading = e.webkitCompassHeading;
+    } else if (typeof e.alpha === 'number') {
+      heading = 360 - e.alpha;
+    }
+
+    if (heading !== null && Number.isFinite(heading)) {
+      state.heading = (heading + 360) % 360;
+    }
+  }
+
+  async function requestOrientationOnce() {
+    if (state.orientationPermissionAsked) return;
+    state.orientationPermissionAsked = true;
+
+    try {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const permission = await DeviceOrientationEvent.requestPermission();
+        if (permission !== 'granted') return;
+      }
+      window.addEventListener('deviceorientationabsolute', orientationHandler, true);
+      window.addEventListener('deviceorientation', orientationHandler, true);
+    } catch (e) {}
+  }
+
+  function isRecognized() {
+    if (state.lat === null || state.lng === null) return false;
+    if (state.accuracy !== null && state.accuracy > MAX_GPS_ACCURACY_M) return false;
+
+    const distance = distanceMeters(state.lat, state.lng, TARGET.lat, TARGET.lng);
+    if (distance > MAX_DISTANCE_M) return false;
+
+    // Wenn der Kompass noch nicht verfügbar ist, reicht für diesen Minimal-Prototyp die Nähe.
+    // Sobald Kompassdaten verfügbar sind, wird zusätzlich die Blickrichtung geprüft.
+    if (state.heading === null) return true;
+
+    const targetBearing = bearingDeg(state.lat, state.lng, TARGET.lat, TARGET.lng);
+    const diff = angleDiff(state.heading, targetBearing);
+    return diff <= MAX_ANGLE_DEG;
+  }
+
+  function showResult(ok) {
+    result.textContent = ok ? 'Erkennung erfolgreich' : 'Erkennung fehlgeschlagen';
+    result.className = 'show ' + (ok ? 'ok' : 'bad');
+    window.setTimeout(() => { result.className = ''; }, 1900);
+  }
+
+  shutter.addEventListener('click', async () => {
+    await requestOrientationOnce();
+    // Kurze Verzögerung, damit iOS nach Freigabe erste Kompasswerte liefern kann.
+    window.setTimeout(() => showResult(isRecognized()), 350);
+  });
+
+  // Beim Öffnen direkt Kamera und Standort anfragen.
+  startCamera();
+  startGps();
+})();
+</script>
+</body>
+</html>
